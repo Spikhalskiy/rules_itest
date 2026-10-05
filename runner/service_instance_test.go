@@ -3,18 +3,30 @@ package runner
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
 )
 
+// TestHelperExitProcess is not a real test: it is the portable failing child
+// process that TestWaitUntilHealthyErrors launches by re-running this binary.
+func TestHelperExitProcess(t *testing.T) {
+	if os.Getenv("RULES_ITEST_HELPER_PROCESS") != "1" {
+		t.Skip("helper process only")
+	}
+	os.Exit(1)
+}
+
 func TestWaitUntilHealthyErrors(t *testing.T) {
 	const label = "//example:server"
 
-	exitCmd := exec.Command("false")
+	exitCmd := exec.Command(os.Args[0], "-test.run=^TestHelperExitProcess$")
+	exitCmd.Env = append(os.Environ(), "RULES_ITEST_HELPER_PROCESS=1")
 	exitErr := exitCmd.Run()
-	if exitErr == nil {
-		t.Fatal("cmd.Run() error = nil, want *exec.ExitError")
+	var exitErrType *exec.ExitError
+	if !errors.As(exitErr, &exitErrType) {
+		t.Fatalf("cmd.Run() error = %v, want *exec.ExitError", exitErr)
 	}
 
 	canceled, cancel := context.WithCancel(context.Background())
