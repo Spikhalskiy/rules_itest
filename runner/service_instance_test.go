@@ -6,98 +6,83 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
-
-	"rules_itest/svclib"
 )
 
-func TestWaitUntilHealthyTaskErrorIncludesLabel(t *testing.T) {
-	wantErr := errors.New("task failed")
-	service := &ServiceInstance{
-		VersionedServiceSpec: svclib.VersionedServiceSpec{ServiceSpec: svclib.ServiceSpec{
-			Type:  "task",
-			Label: "//example:setup",
-		}},
-		waitErrFn: func() error { return wantErr },
+func TestWaitUntilHealthyErrors(t *testing.T) {
+	const label = "//example:server"
+
+	exitCmd := exec.Command("false")
+	exitErr := exitCmd.Run()
+	if exitErr == nil {
+		t.Fatal("cmd.Run() error = nil, want *exec.ExitError")
 	}
 
-	err := service.WaitUntilHealthy(context.Background())
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("WaitUntilHealthy() error = %v, want wrapped %v", err, wantErr)
-	}
-	if !strings.Contains(err.Error(), service.Label) {
-		t.Fatalf("WaitUntilHealthy() error = %q, want service label %q", err, service.Label)
-	}
-}
-
-func TestWaitUntilHealthyServiceErrorIncludesLabel(t *testing.T) {
-	wantErr := errors.New("service failed")
-	service := &ServiceInstance{
-		VersionedServiceSpec: svclib.VersionedServiceSpec{ServiceSpec: svclib.ServiceSpec{
-			Type:                "service",
-			Label:               "//example:server",
-			HealthCheckInterval: "1ms",
-		}},
-		runErr: wantErr,
-	}
-
-	err := service.WaitUntilHealthy(context.Background())
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("WaitUntilHealthy() error = %v, want wrapped %v", err, wantErr)
-	}
-	if !strings.Contains(err.Error(), service.Label) {
-		t.Fatalf("WaitUntilHealthy() error = %q, want service label %q", err, service.Label)
-	}
-}
-
-func TestWaitUntilHealthyContextErrorIncludesLabel(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	service := &ServiceInstance{
-		VersionedServiceSpec: svclib.VersionedServiceSpec{ServiceSpec: svclib.ServiceSpec{
-			Type:                "service",
-			Label:               "//example:server",
-			HealthCheckInterval: "1ms",
-		}},
+
+	taskErr := errors.New("task failed")
+	runErr := errors.New("service failed")
+
+	tests := []struct {
+		name    string
+		typ     string
+		service ServiceInstance
+		ctx     context.Context
+		wantIs  error
+		wantMsg string
+	}{
+		{
+			name:    "task failure",
+			typ:     "task",
+			service: ServiceInstance{waitErrFn: func() error { return taskErr }},
+			wantIs:  taskErr,
+			wantMsg: "exited with error",
+		},
+		{
+			name:    "recorded service error",
+			typ:     "service",
+			service: ServiceInstance{runErr: runErr},
+			wantIs:  runErr,
+			wantMsg: "exited with error",
+		},
+		{
+			name:    "exit before runErr is recorded",
+			typ:     "service",
+			service: ServiceInstance{cmd: exitCmd, waitErrFn: func() error { return exitErr }, done: true},
+			wantIs:  exitErr,
+			wantMsg: "exited before becoming healthy",
+		},
+		{
+			name:    "context expiry",
+			typ:     "service",
+			service: ServiceInstance{},
+			ctx:     canceled,
+			wantIs:  context.Canceled,
+			wantMsg: "never became healthy",
+		},
 	}
 
-	err := service.WaitUntilHealthy(ctx)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("WaitUntilHealthy() error = %v, want wrapped context cancellation", err)
-	}
-	if !strings.Contains(err.Error(), "never became healthy") {
-		t.Fatalf("WaitUntilHealthy() error = %q, want \"never became healthy\" classification", err)
-	}
-	if strings.Contains(err.Error(), "exited") {
-		t.Fatalf("WaitUntilHealthy() error = %q, context expiry must not be reported as a process exit", err)
-	}
-	if !strings.Contains(err.Error(), service.Label) {
-		t.Fatalf("WaitUntilHealthy() error = %q, want service label %q", err, service.Label)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &tt.service
+			service.Type = tt.typ
+			service.Label = label
+			service.HealthCheckInterval = "1ms"
+			ctx := tt.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
 
-func TestWaitUntilHealthyDoneBeforeRunErrRecordedWrapsExitError(t *testing.T) {
-	cmd := exec.Command("false")
-	waitErr := cmd.Run()
-	var exitErr *exec.ExitError
-	if !errors.As(waitErr, &exitErr) {
-		t.Fatalf("cmd.Run() error = %v, want *exec.ExitError", waitErr)
-	}
-	service := &ServiceInstance{
-		VersionedServiceSpec: svclib.VersionedServiceSpec{ServiceSpec: svclib.ServiceSpec{
-			Type:                "service",
-			Label:               "//example:server",
-			HealthCheckInterval: "1ms",
-		}},
-		cmd:       cmd,
-		waitErrFn: func() error { return waitErr },
-		done:      true,
-	}
-
-	err := service.WaitUntilHealthy(context.Background())
-	if !errors.As(err, &exitErr) {
-		t.Fatalf("WaitUntilHealthy() error = %v, want wrapped *exec.ExitError", err)
-	}
-	if !strings.Contains(err.Error(), service.Label) || !strings.Contains(err.Error(), "exited before becoming healthy") {
-		t.Fatalf("WaitUntilHealthy() error = %q, want label and exit classification", err)
+			err := service.WaitUntilHealthy(ctx)
+			if err == nil {
+				t.Fatal("WaitUntilHealthy() error = nil")
+			}
+			if !errors.Is(err, tt.wantIs) {
+				t.Fatalf("error = %v, want wrapped %v", err, tt.wantIs)
+			}
+			if !strings.Contains(err.Error(), label) || !strings.Contains(err.Error(), tt.wantMsg) {
+				t.Fatalf("error = %q, want label %q and %q", err, label, tt.wantMsg)
+			}
+		})
 	}
 }
