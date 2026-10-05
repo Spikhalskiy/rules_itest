@@ -67,7 +67,7 @@ func TestWaitUntilHealthyErrors(t *testing.T) {
 		{
 			name:    "context expiry",
 			typ:     "service",
-			service: ServiceInstance{},
+service: ServiceInstance{cmd: &exec.Cmd{}},
 			ctx:     canceled,
 			wantIs:  context.Canceled,
 			wantMsg: "never became healthy",
