@@ -17,22 +17,34 @@ func TestCommandHealthCheckBoundsInheritedOutputPipeWait(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	service := &ServiceInstance{
-		VersionedServiceSpec: svclib.VersionedServiceSpec{ServiceSpec: svclib.ServiceSpec{
-			Type:            "service",
-			Label:           "//example:service",
-			HealthCheck:     executable,
-			HealthCheckArgs: []string{"-test.run=TestCommandHealthCheckHelperProcess"},
-		}},
-		cmd: &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}},
-	}
+	for _, tc := range []struct {
+		name       string
+		waitDelay  string
+		minElapsed time.Duration
+	}{
+		{name: "default", waitDelay: "", minElapsed: defaultHealthCheckWaitDelay},
+		{name: "configured", waitDelay: "300ms", minElapsed: 300 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &ServiceInstance{
+				VersionedServiceSpec: svclib.VersionedServiceSpec{ServiceSpec: svclib.ServiceSpec{
+					Type:                 "service",
+					Label:                "//example:service",
+					HealthCheck:          executable,
+					HealthCheckArgs:      []string{"-test.run=TestCommandHealthCheckHelperProcess"},
+					HealthCheckWaitDelay: tc.waitDelay,
+				}},
+				cmd: &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}},
+			}
 
-	start := time.Now()
-	if !service.HealthCheck(context.Background(), 0) {
-		t.Fatal("HealthCheck() = false, want successful health-check exit to remain successful")
-	}
-	if elapsed := time.Since(start); elapsed >= time.Second {
-		t.Fatalf("HealthCheck() took %s, want less than 1s", elapsed)
+			start := time.Now()
+			if !service.HealthCheck(context.Background(), 0) {
+				t.Fatal("HealthCheck() = false, want successful health-check exit to remain successful")
+			}
+			if elapsed := time.Since(start); elapsed < tc.minElapsed || elapsed >= time.Second {
+				t.Fatalf("HealthCheck() took %s, want between %s and 1s", elapsed, tc.minElapsed)
+			}
+		})
 	}
 }
 
